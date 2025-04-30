@@ -7,7 +7,10 @@ import os
 def parse_line(line):
     try:
         term_part, urls_part = line.split(",", 1)
+        import re
         term = term_part.split(":")[1].strip()
+        term = re.sub(r"[‘’“”\"]", "", term)
+
         url_clicks = urls_part.strip().split("~")
         records = []
         for uc in url_clicks:
@@ -25,24 +28,20 @@ if __name__ == "__main__":
         .appName("SearchLogPreprocessing") \
         .getOrCreate()
 
-    # Read the log file
     rdd = spark.sparkContext.textFile("searchLog.csv")
 
-    # Parse each line into (term, url, clicks)
     parsed_rdd = rdd.flatMap(parse_line)
 
-    # Convert to DataFrame
     records = parsed_rdd.map(lambda x: Row(term=x[0], url=x[1], clicks=x[2]))
     df = spark.createDataFrame(records)
 
-    # Save as JSON to processed_data/
     output_dir = "processed_data"
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
     df.write.mode('overwrite').json(output_dir)
 
-    print("✅ Data successfully processed to 'processed_data/'")
+    print("Data successfully processed to 'processed_data/'")
 
     spark.stop()
 
@@ -53,16 +52,14 @@ from pyspark.sql import SparkSession
 
 app = Flask(__name__)
 
-# Start SparkSession
 spark = SparkSession.builder \
     .appName("QueryServer") \
     .getOrCreate()
 
-# Load the processed data
 df = spark.read.json("processed_data")
 df.cache()
 
-# Helper: domain priority sorter
+# Domain priority: .org > .edu > .com
 def domain_priority(url):
     if url.endswith(".org"):
         return 1
@@ -78,8 +75,16 @@ def results():
     term = request.json.get("term")
     filtered = df.filter(df.term == term)
     grouped = filtered.groupBy("url").sum("clicks")
-    results = grouped.rdd.map(lambda row: (row["url"], row["sum(clicks)"])).collect()
-    results.sort(key=lambda x: (-x[1], domain_priority(x[0])))
+
+    results = grouped.rdd.map(lambda row: (row["url"], int(row["sum(clicks)"]))).collect()
+
+    # Debugging
+    print("UNSORTED RESULTS:", results)
+
+    results.sort(key=lambda x: (-x[1], domain_priority(x[0]), x[0]))
+
+    print("SORTED RESULTS:", results)
+
     return jsonify({"results": {url: clicks for url, clicks in results}})
 
 @app.route('/trends', methods=['POST'])
@@ -112,3 +117,4 @@ def get_best_terms():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
+
