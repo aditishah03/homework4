@@ -47,8 +47,9 @@ if __name__ == "__main__":
 
 // query_server.py
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, Response, jsonify
 from pyspark.sql import SparkSession
+import json
 
 app = Flask(__name__)
 
@@ -73,19 +74,19 @@ def domain_priority(url):
 @app.route('/results', methods=['POST'])
 def results():
     term = request.json.get("term")
+
     filtered = df.filter(df.term == term)
     grouped = filtered.groupBy("url").sum("clicks")
+    collected = grouped.collect()
 
-    results = grouped.rdd.map(lambda row: (row["url"], int(row["sum(clicks)"]))).collect()
+    results = [(row["url"], int(row["sum(clicks)"])) for row in collected]
 
-    # Debugging
-    print("UNSORTED RESULTS:", results)
+    # Sort only by clicks DESC
+    results.sort(key=lambda x: x[1], reverse=True)
 
-    results.sort(key=lambda x: (-x[1], domain_priority(x[0]), x[0]))
-
-    print("SORTED RESULTS:", results)
-
-    return jsonify({"results": {url: clicks for url, clicks in results}})
+    # Build ordered JSON string manually
+    result_dict = {"results": {url: clicks for url, clicks in results}}
+    return Response(json.dumps(result_dict), mimetype='application/json')
 
 @app.route('/trends', methods=['POST'])
 def trends():
